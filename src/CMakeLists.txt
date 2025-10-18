@@ -151,7 +151,7 @@ target_link_libraries(bitcoin_common
 
 include(InstallBinaryComponent)
 
-if(ENABLE_WALLET)
+if(FALSE)
   add_subdirectory(wallet)
 
   if(BUILD_WALLET_TOOL)

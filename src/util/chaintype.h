@@ -1,23 +1,31 @@
-// Copyright (c) 2023 The Bitcoin Core developers
-// Distributed under the MIT software license, see the accompanying
-// file COPYING or http://www.opensource.org/licenses/mit-license.php.
-
-#ifndef BITCOIN_UTIL_CHAINTYPE_H
-#define BITCOIN_UTIL_CHAINTYPE_H
-
-#include <optional>
+#pragma once
 #include <string>
+#include <stdexcept>  // Add this for std::runtime_error
 
 enum class ChainType {
     MAIN,
     TESTNET,
     SIGNET,
     REGTEST,
-    TESTNET4,
+    SUPPERCHAIN
 };
 
-std::string ChainTypeToString(ChainType chain);
+inline std::string ChainTypeToString(ChainType c) {
+    switch (c) {
+        case ChainType::MAIN:        return "main";
+        case ChainType::TESTNET:     return "test";
+        case ChainType::SIGNET:      return "signet";
+        case ChainType::REGTEST:     return "regtest";
+        case ChainType::SUPPERCHAIN: return "supperchain";
+    }
+    return "main";
+}
 
-std::optional<ChainType> ChainTypeFromString(std::string_view chain);
-
-#endif // BITCOIN_UTIL_CHAINTYPE_H
+inline ChainType ChainTypeFromString(const std::string& s) {
+    if (s == "main")        return ChainType::MAIN;
+    if (s == "test")        return ChainType::TESTNET;
+    if (s == "signet")      return ChainType::SIGNET;
+    if (s == "regtest")     return ChainType::REGTEST;
+    if (s == "supperchain") return ChainType::SUPPERCHAIN;
+    throw std::runtime_error("Unknown chain \"" + s + "\"");
+}

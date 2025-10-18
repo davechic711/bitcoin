@@ -1,96 +1,73 @@
-// Copyright (c) 2022 The Bitcoin Core developers
+// Copyright (c) 2009-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #ifndef BITCOIN_POLICY_TRUC_POLICY_H
 #define BITCOIN_POLICY_TRUC_POLICY_H
 
-#include <consensus/amount.h>
-#include <policy/packages.h>
-#include <policy/policy.h>
 #include <primitives/transaction.h>
 #include <txmempool.h>
-#include <util/result.h>
 
-#include <set>
+#include <optional>
 #include <string>
+#include <utility>
 
-// This module enforces rules for BIP 431 TRUC transactions which help make
-// RBF abilities more robust. A transaction with version=3 is treated as TRUC.
-static constexpr decltype(CTransaction::version) TRUC_VERSION{3};
+class CFeeRate;
+class CTransaction;
+class CTxMemPool;
 
-// TRUC only allows 1 parent and 1 child when unconfirmed. This translates to a descendant set size
-// of 2 and ancestor set size of 2.
-/** Maximum number of transactions including an unconfirmed tx and its descendants. */
-static constexpr unsigned int TRUC_DESCENDANT_LIMIT{2};
-/** Maximum number of transactions including a TRUC tx and all its mempool ancestors. */
-static constexpr unsigned int TRUC_ANCESTOR_LIMIT{2};
+/** The Right to Unconfirmed Children (TRUC) transaction version */
+static constexpr int32_t TRUC_VERSION = 3;
 
-/** Maximum sigop-adjusted virtual size of all v3 transactions. */
-static constexpr int64_t TRUC_MAX_VSIZE{10000};
-static constexpr int64_t TRUC_MAX_WEIGHT{TRUC_MAX_VSIZE * WITNESS_SCALE_FACTOR};
-/** Maximum sigop-adjusted virtual size of a tx which spends from an unconfirmed TRUC transaction. */
-static constexpr int64_t TRUC_CHILD_MAX_VSIZE{1000};
-static constexpr int64_t TRUC_CHILD_MAX_WEIGHT{TRUC_CHILD_MAX_VSIZE * WITNESS_SCALE_FACTOR};
-// These limits are within the default ancestor/descendant limits.
-static_assert(TRUC_MAX_VSIZE + TRUC_CHILD_MAX_VSIZE <= DEFAULT_ANCESTOR_SIZE_LIMIT_KVB * 1000);
-static_assert(TRUC_MAX_VSIZE + TRUC_CHILD_MAX_VSIZE <= DEFAULT_DESCENDANT_SIZE_LIMIT_KVB * 1000);
+/** Check TRUC rules for a single transaction */
+std::optional<std::pair<std::string, const CTransaction*>> SingleTRUCChecks(
+    const CTransactionRef& ptx,
+    const CTxMemPool::setEntries& ancestors,
+    const std::set<uint256>& conflicts,
+    int64_t vsize);
 
-/** Must be called for every transaction, even if not TRUC. Not strictly necessary for transactions
- * accepted through AcceptMultipleTransactions.
- *
- * Checks the following rules:
- * 1. A TRUC tx must only have TRUC unconfirmed ancestors.
- * 2. A non-TRUC tx must only have non-TRUC unconfirmed ancestors.
- * 3. A TRUC's ancestor set, including itself, must be within TRUC_ANCESTOR_LIMIT.
- * 4. A TRUC's descendant set, including itself, must be within TRUC_DESCENDANT_LIMIT.
- * 5. If a TRUC tx has any unconfirmed ancestors, the tx's sigop-adjusted vsize must be within
- * TRUC_CHILD_MAX_VSIZE.
- * 6. A TRUC tx must be within TRUC_MAX_VSIZE.
- *
- *
- * @param[in]   mempool_ancestors       The in-mempool ancestors of ptx.
- * @param[in]   direct_conflicts        In-mempool transactions this tx conflicts with. These conflicts
- *                                      are used to more accurately calculate the resulting descendant
- *                                      count of in-mempool ancestors.
- * @param[in]   vsize                   The sigop-adjusted virtual size of ptx.
- *
- * @returns 3 possibilities:
- * - std::nullopt if all TRUC checks were applied successfully
- * - debug string + pointer to a mempool sibling if this transaction would be the second child in a
- *   1-parent-1-child cluster; the caller may consider evicting the specified sibling or return an
- *   error with the debug string.
- * - debug string + nullptr if this transaction violates some TRUC rule and sibling eviction is not
- *   applicable.
- */
-std::optional<std::pair<std::string, CTransactionRef>> SingleTRUCChecks(const CTransactionRef& ptx,
-                                          const CTxMemPool::setEntries& mempool_ancestors,
-                                          const std::set<Txid>& direct_conflicts,
-                                          int64_t vsize);
+/** Check TRUC rules for package transactions */
+std::optional<std::string> PackageTRUCChecks(
+    const CTransactionRef& ptx,
+    int64_t vsize,
+    const std::vector<CTransactionRef>& package,
+    const CTxMemPool::setEntries& ancestors);
 
-/** Must be called for every transaction that is submitted within a package, even if not TRUC.
- *
- * For each transaction in a package:
- * If it's not a TRUC transaction, verify it has no direct TRUC parents in the mempool or the package.
+/** Check if entries and txids are disjoint */
+std::optional<std::string> EntriesAndTxidsDisjoint(
+    const CTxMemPool::setEntries& entries,
+    const std::set<uint256>& txids,
+    const uint256& hash);
 
- * If it is a TRUC transaction, verify that any direct parents in the mempool or the package are TRUC.
- * If such a parent exists, verify that parent has no other children in the package or the mempool,
- * and that the transaction itself has no children in the package.
- *
- * If any TRUC violations in the package exist, this test will fail for one of them:
- * - if a TRUC transaction T has a parent in the mempool and a child in the package, then PTRUCC(T) will fail
- * - if a TRUC transaction T has a parent in the package and a child in the package, then PTRUCC(T) will fail
- * - if a TRUC transaction T and a TRUC (sibling) transaction U have some parent in the mempool,
- *   then PTRUCC(T) and PTRUCC(U) will fail
- * - if a TRUC transaction T and a TRUC (sibling) transaction U have some parent in the package,
- *   then PTRUCC(T) and PTRUCC(U) will fail
- * - if a TRUC transaction T has a parent P and a grandparent G in the package, then
- *   PTRUCC(P) will fail (though PTRUCC(G) and PTRUCC(T) might succeed).
- *
- * @returns debug string if an error occurs, std::nullopt otherwise.
- * */
-std::optional<std::string> PackageTRUCChecks(const CTransactionRef& ptx, int64_t vsize,
-                                           const Package& package,
-                                           const CTxMemPool::setEntries& mempool_ancestors);
+/** Check if replacement pays more than conflicts */
+std::optional<std::string> PaysMoreThanConflicts(
+    const CTxMemPool::setEntries& iters_conflicting,
+    const CFeeRate& newFeeRate,
+    const uint256& hash);
+
+/** Get entries for conflicts */
+std::optional<std::string> GetEntriesForConflicts(
+    const CTransaction& tx,
+    const CTxMemPool& pool,
+    const CTxMemPool::setEntries& iters_conflicting,
+    CTxMemPool::setEntries& all_conflicts);
+
+/** Check if transaction has no new unconfirmed inputs */
+std::optional<std::string> HasNoNewUnconfirmed(
+    const CTransaction& tx,
+    const CTxMemPool& pool,
+    const CTxMemPool::setEntries& all_conflicts);
+
+/** Check if replacement pays for RBF */
+std::optional<std::string> PaysForRBF(
+    CAmount original_fees,
+    CAmount replacement_fees,
+    int64_t replacement_vsize,
+    CFeeRate relay_fee,
+    const uint256& hash);
+
+/** Check if replacement improves fee rate diagram */
+std::optional<std::pair<bool, std::string>> ImprovesFeerateDiagram(
+    class CTxMemPool::ChangeSet& changeset);
 
 #endif // BITCOIN_POLICY_TRUC_POLICY_H
